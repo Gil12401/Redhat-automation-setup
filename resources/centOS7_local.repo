@@ -1,5 +1,0 @@
-[rhel-BaseOS]
-name=local-repo-BaseOS
-baseurl=
-gpgcheck=0
-Enabled=1

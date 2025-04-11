@@ -47,10 +47,10 @@ get_bash_minor() {
 # 파일을 한줄씩 읽어들이면서 key-value 연관 배열에 담음
 
 parse_kv_file() {
+    unset map
     local target_file="$1"
     declare -gA map
-    unset map
-
+   
     # 키=값 형식의 라인들만 필터링
     mapfile -t lines < <(grep '=' "${target_file}")
 
@@ -63,4 +63,38 @@ parse_kv_file() {
         # shellcheck disable=SC2034
         map["${key}"]="${value}"
     done
+}
+
+get_os_version() {
+    parse_kv_file /etc/os-release || error_exit "버전 정보 로드 실패"
+    version_id=$(printf "%.0f" "${map["VERSION_ID"]}")
+    echo "${version_id}"
+}
+
+# =============================== Array ================================
+
+# 배열에서 특정 값을 제거하는 함수 (원본 배열 직접 수정)
+# 사용법: remove_from_array_inplace "배열이름" "제거할_값"
+remove_from_array_inplace() {
+    local arr_name="$1"
+    local target="$2"
+    local result=()
+
+    eval "local original=(\"\${${arr_name}[@]}\")"
+
+    for item in "${original[@]}"; do
+        if [[ "$item" != "$target" ]]; then
+            result+=("$item")
+        fi
+    done
+
+    eval "${arr_name}=(\"\${result[@]}\")"
+}
+
+# usage: sort_version_array array[@]
+# 배열 안의 문자열을 버전식 오름차순 정렬 (예: ens1 < ens10 < ens100)
+sort_version_array() {
+    local input=("${!1}")
+    local sorted=($(printf "%s\n" "${input[@]}" | sort -V))
+    echo "${sorted[@]}"
 }

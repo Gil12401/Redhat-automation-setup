@@ -1,4 +1,6 @@
 #!/bin/bash
+
+#IFS Backup 
 PRE_IFS=${IFS}
 
 # Directory Path 
@@ -37,13 +39,6 @@ extract_local_repo_files() {
         local key=$(echo "${value}" | cut -d '_' -f 1)
         local_repo_map["${key}"]="$(realpath "${RESOURCES_DIR}/${value}")"
     done
-}
-
-# -------------------------- OS Version --------------------------
-get_os_version() {
-    parse_kv_file /etc/*release || error_exit "버전 정보 로드 실패"
-    version_id=$(printf "%.0f" "${map["VERSION_ID"]}")
-    echo "${version_id}"
 }
 
 select_repo_file() {

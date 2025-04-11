@@ -12,7 +12,7 @@ cursor=0
 options=(
     "Local Repository 설정"
     "Bonding 설정"
-    "작업 예정 1."
+    "Bonding 설정 초기화"
     "작업 예정 2."
     "작업 예정 3."
     "종료"
@@ -21,7 +21,7 @@ options=(
 handlers=(
     "run_config_localrepo"
     "run_config_bonding"
-    "run_task1"
+    "run_reset_bonding"
     "run_task2"
     "run_task3"
     "run_exit"
@@ -32,11 +32,11 @@ run_config_localrepo() {
 }
 
 run_config_bonding() {
-  echo "[TODO] bonding.sh 실행 예정"
+  bash "${SCRIPT_DIR}/modules/config_bonding.sh"
 }
 
-run_task1() {
-  echo "[TODO] task1 실행 예정"
+run_reset_bonding() {
+  bash "${SCRIPT_DIR}/modules/reset_bonding.sh"
 }
 
 run_task2() {
