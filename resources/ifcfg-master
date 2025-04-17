@@ -1,0 +1,10 @@
+DEVICE=
+IPADDR=
+NETMASK=
+GATEWAY=
+DNS1=
+BOOTPROTO=none
+ONBOOT=yes
+NM_CONTROLLED=no
+USERCTL=no
+BONDING_OPTS="mode=1 miimon=100 use_carrier=0 primary=eth0"

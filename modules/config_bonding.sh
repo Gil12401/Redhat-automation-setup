@@ -60,11 +60,15 @@ select_bonding_members() {
             ;;
 
             "")
-                bonding_map["${cur_role}"]="${options[${cursor}]}"
-                remove_from_array_inplace "options" "${options[${cursor}]}"
+                local selected_nic="${options[${cursor}]}"
+
+                bonding_map["${cur_role}"]="${selected_nic}"
+                remove_from_array_inplace "options" "${selected_nic}"
+                log "[DEBUG] 선택된 ${cur_role} NIC : ${selected_nic}"
                 ((index++))
+                sleep 0.5
                 cursor=0
-                ;;
+            ;;
         esac
     done
 }
@@ -110,10 +114,10 @@ select_bonding_mode() {
 read_bonding_ip_info() {
 
     declare -gA bonding_info_map
-    declare -g ip_addr
-    declare -g netmask
-    declare -g gateway
-    declare -g dns1
+    # declare -g ip_addr
+    # declare -g netmask
+    # eclare -g gateway
+    # declare -g dns1
 
     while :; do
         echo ""
@@ -129,17 +133,16 @@ read_bonding_ip_info() {
         echo "   Netmask (예: 255.255.255.0)   "
         echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
         echo "========================================="
-        bonding_info_map["NETMASK"]=${netmask}
         read -rp "NETMASK: " netmask
-       
+        bonding_info_map["NETMASK"]=${netmask}
         [[ "${netmask}" == "r" || "${netmask}" == "R" ]] && continue
 
         echo "========================================="
         echo "   Gateway 입력                           "
         echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
         echo "========================================="
-        bonding_info_map["GATEWAY"]=${gateway}
         read -rp "GATEWAY: " gateway
+        bonding_info_map["GATEWAY"]=${gateway}
       
         [[ "${gateway}" == "r" || "${gateway}" == "R" ]] && continue
 
@@ -147,11 +150,11 @@ read_bonding_ip_info() {
         echo "   DNS 서버 입력 (기본: 8.8.8.8)          "
         echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
         echo "========================================="
-        read -rp "DNS1 [공배 시, 8.8.8.8 사용 ]: " dns1
-        bonding_info_map["DNS1"]=${dns1}
-        
+        read -rp "DNS1 [공백 시, 8.8.8.8 사용 ]: " dns1
+       
         [[ "${dns1}" == "r" || "${dns1}" == "R" ]] && continue
         [[ -z "${dns1}" ]] && dns1="8.8.8.8"
+        bonding_info_map["DNS1"]=${dns1}
 
         break
     done
@@ -176,21 +179,27 @@ extract_bonding_files() {
     done
 }
 
-backup_ifcfg_files() {
+clean_ifcfg_files() {
     local path="/etc/sysconfig/network-scripts"
-    local bakdir="${path}/ifcfg_bak"
 
-    mkdir -p "${bakdir}"
-
+    # bonding 대상 NIC 목록
+    local bonding_nics=()
     for role in primary secondary; do
-        local nic="${bonding_map[$role]}"
-        local file="${path}/ifcfg-${nic}"
+        bonding_nics+=("${bonding_map[$role]}")
+    done
 
-        if [[ -f "${file}" ]]; then
-            cp "${file}" "${bakdir}/"
-            log "백업됨: ${file} → ${bakdir}/"
+    for file in ${path}/ifcfg-*; do
+        local filename=$(basename "$file")
+        local nic_name="${filename#ifcfg-}"
+
+        # loopback 제외
+        [[ "${nic_name}" == "lo" ]] && continue
+
+        if [[ " ${bonding_nics[*]} " =~ " ${nic_name} " ]]; then
+            log "유지됨: ${file} (bonding 대상 NIC)"
         else
-            log "백업 생략: ${file} 없음"
+            log "삭제됨: ${file} (bonding 구성과 무관)"
+            rm -f "$file"
         fi
     done
 }
@@ -259,14 +268,16 @@ generate_bonding_ifcfg_master() {
                 ;;
 
             IPADDR|NETMASK|GATEWAY|DNS1)
+                echo "[DEBUG] ${key}=${bonding_info_map[${key}]}"
                 echo "${key}=${bonding_info_map[${key}]}" >> "${output_file}"
                 ;;
 
             # BONDING_OPTS="mode=1 miimon=100 use_carrier=0 primary=eth0"
             BONDING_OPTS)
+                value=$(echo "${line}" | cut -d '=' -f2- | sed 's/^"//; s/"$//')
                 value=$(echo "${value}" | sed "s/mode=[0-9]\+/mode=${bonding_mode_num}/")
                 value=$(echo "${value}" | sed "s/primary=[a-zA-Z0-9]\+/primary=${bonding_map["primary"]}/")
-                echo "${key}=${value}" >> "${output_file}"
+                echo "${key}=\"${value}\"" >> "${output_file}"  # 다시 따옴표 감싸기
                 ;;
 
             *)
@@ -277,6 +288,69 @@ generate_bonding_ifcfg_master() {
     log "${output_file} : 생성 완료: "
     cat ${output_file}
 }
+
+# -------------------------- RHEL 8버전 이상 - nmcli 설정 -------------------
+
+configure_bonding_nmcli() {
+    # 1. NetworkManager 확인 및 활성화
+    if ! systemctl is-active --quiet NetworkManager; then
+        log "NetworkManager 활성화 중..."
+        systemctl enable --now NetworkManager
+    fi
+
+    # 2. bonding master 생성
+    log "bonding master 생성: bond0 (mode=${bonding_mode})"
+    nmcli connection add type bond ifname bond0 mode "${bonding_mode}" con-name bond0
+
+    # 3. bonding 세부 옵션 설정
+    nmcli connection modify bond0 bond.options "miimon=100, primary=${bonding_map["primary"]}"
+    nmcli connection modify bond0 connection.autoconnect-slaves 1
+
+    # 4. slave NIC 연결
+    local index=1
+    for role in primary secondary; do
+        local nic="${bonding_map[${role}]}"
+        nmcli connection add type ethernet slave-type bond con-name "bond0-p${index}" ifname "${nic}" master bond0
+        log "Slave 연결 완료: ${nic} → bond0-p${index}"
+        ((index++))
+    done
+        
+    # 5. prefix 변환 (netmask → CIDR)
+    local ip="${bonding_info_map["ip_addr"]}"
+    local netmask="${bonding_info_map["netmask"]}"
+    local prefix=$(get_prefix_from_subnet "${netmask}")
+    local gateway="${bonding_info_map["gateway"]}"
+    local dns="${bonding_info_map["dns1"]}"
+
+    # 6. bonding master에 IP/GW 설정
+    nmcli connection modify bond0 ipv4.addresses "${ip}/${prefix}"
+    nmcli connection modify bond0 ipv4.gateway "${gateway}"
+    nmcli connection modify bond0 ipv4.dns "${dns}"
+    nmcli connection modify bond0 ipv4.method manual
+
+    # 7. bonding 활성화
+    nmcli connection up bond0
+}
+
+
+# -------------------------- 모든 버전 공통 : Bonding 구성 확인 -------------------
+
+show_bonding_status() {
+    local bond_dev="bond0"
+    local bond_info="/proc/net/bonding/${bond_dev}"
+
+    if [[ -f "${bond_info}" ]]; then
+        echo ""
+        echo "==========================================="
+        echo "     Bonding 상태 (${bond_dev}) 확인 결과"
+        echo "==========================================="
+        cat "${bond_info}"
+    else
+        echo "[ERROR] ${bond_info} 파일을 찾을 수 없습니다. bonding이 정상적으로 구성되지 않았을 수 있습니다."
+    fi
+}
+
+
 
 # -------------------------- Main --------------------------
 
@@ -301,20 +375,23 @@ fi
 
 version_id=$(get_os_version)
 read_bonding_ip_info
+flush_all_nic_ip
 
 if [[ ${version_id} -le 7 ]]; then
-    # RHEL7 버전 이하 : ifcfg 설저파일 ( NetworkManager OFF )
+    # RHEL7 버전 이하 : ifcfg 설정파일 ( NetworkManager OFF )
   
     systemctl stop NetworkManager
-
+    
     extract_bonding_files
-    backup_ifcfg_files
+    clean_ifcfg_files
     generate_bonding_ifcfg_slaves
     generate_bonding_ifcfg_master
-
+  
     systemctl restart network
-
+    
 else
     # RHEL8 버전 이상 : nmtui or nmcli ( NetworkManager )
-    true
+    configure_bonding_nmcli
 fi
+
+show_bonding_status

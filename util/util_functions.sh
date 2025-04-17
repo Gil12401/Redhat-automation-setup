@@ -3,7 +3,7 @@
 # ========================== Logging ==========================
 
 log() {
-    echo -e "[INFO] $1"
+    echo -e "[INFO $(date +'%F %T')] $1"
 }
 
 error_exit() {
@@ -97,4 +97,42 @@ sort_version_array() {
     local input=("${!1}")
     local sorted=($(printf "%s\n" "${input[@]}" | sort -V))
     echo "${sorted[@]}"
+}
+
+#==================== Bonding ===============================
+flush_all_nic_ip() {
+    local nics=($(ls /sys/class/net | grep -v '^lo$'))
+
+    for nic in "${nics[@]}"; do
+        ip addr flush dev "$nic"
+        log "IP flushed: $nic"
+    done
+}
+
+dec2bin() {
+    local dec=$1
+    echo "obase=2; ${dec}" | bc
+}
+
+get_prefix_from_subnet() {
+    PRE_IFS=${IFS}
+
+    local prefix_num=0
+    local subnet=$1
+    IFS="." read -r -a subnet_array <<< "${subnet}"
+    IFS=${PRE_IFS}
+
+    for octet in "${subnet_array[@]}"; do
+        local bin_num=$(dec2bin "${octet}")
+        bin_num_arr=($(echo "${bin_num}" | grep -o .))
+
+        for bit in "${bin_num_arr[@]}"; do
+            if [[ ${bit} -eq 1 ]]; then
+                ((prefix_num++))
+            fi
+        done
+
+    done
+
+    echo "${prefix_num}"
 }
