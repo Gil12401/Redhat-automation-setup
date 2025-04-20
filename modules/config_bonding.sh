@@ -303,7 +303,8 @@ configure_bonding_nmcli() {
     nmcli connection add type bond ifname bond0 mode "${bonding_mode}" con-name bond0
 
     # 3. bonding 세부 옵션 설정
-    nmcli connection modify bond0 bond.options "miimon=100, primary=${bonding_map["primary"]}"
+    nmcli connection modify bond0 +bond.options "miimon=100"
+    nmcli connection modify bond0 +bond.options "primary=${bonding_map["primary"]}"
     nmcli connection modify bond0 connection.autoconnect-slaves 1
 
     # 4. slave NIC 연결
@@ -316,11 +317,11 @@ configure_bonding_nmcli() {
     done
         
     # 5. prefix 변환 (netmask → CIDR)
-    local ip="${bonding_info_map["ip_addr"]}"
-    local netmask="${bonding_info_map["netmask"]}"
+    local ip="${bonding_info_map["IPADDR"]}"
+    local netmask="${bonding_info_map["NETMASK"]}"
     local prefix=$(get_prefix_from_subnet "${netmask}")
-    local gateway="${bonding_info_map["gateway"]}"
-    local dns="${bonding_info_map["dns1"]}"
+    local gateway="${bonding_info_map["GATEWAY"]}"
+    local dns="${bonding_info_map["DNS1"]}"
 
     # 6. bonding master에 IP/GW 설정
     nmcli connection modify bond0 ipv4.addresses "${ip}/${prefix}"
@@ -349,8 +350,6 @@ show_bonding_status() {
         echo "[ERROR] ${bond_info} 파일을 찾을 수 없습니다. bonding이 정상적으로 구성되지 않았을 수 있습니다."
     fi
 }
-
-
 
 # -------------------------- Main --------------------------
 
