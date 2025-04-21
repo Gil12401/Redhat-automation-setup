@@ -41,6 +41,32 @@ get_bash_minor() {
     minor="${BASH_VERSINFO[1]}"
 }
 
+
+# ========================== Copying ==========================
+show_copy_progress() {
+    # example ) show_copy_progress "/mnt" "/dvd" ( /mnt : src, /dvd : dst )
+    local src_dir="$1"
+    local dst_dir="$2"
+
+    # 1. 전체 복사 대상 파일 수 계산 
+    local total_files=$(find ${src_dir} -type f | wc -l)
+    local count=0
+
+    find ${src_dir} -type f | while read -r file; do
+        # copy ( 상대 경로에 따른 하위 디렉터리 생성 )
+        rel_path="${file#$src_dir/}"  
+        mkdir -p "${dst_dir}/$(dirname "${rel_path}")"
+        cp "${file}" "${dst_dir}/${rel_path}"
+
+        # counting 
+        ((count++))
+        percent=$((100 * count / total_files))
+        printf "\rProgress: %d%% (%d / %d)" "${percent}" "${count}" "${total_files}"
+    done
+
+    log "Copying Complete !" 
+}
+
 # ========================== Parsing ==========================
 
 # 첫번째 argument ( $1 ) 의 결과 ( 특정파일에 대한 cat명령어 ) 를 key-value 연관 배열에 담음.
@@ -99,7 +125,7 @@ sort_version_array() {
     echo "${sorted[@]}"
 }
 
-#==================== Bonding ===============================
+#==================== Network ===============================
 flush_all_nic_ip() {
     local nics=($(ls /sys/class/net | grep -v '^lo$'))
 

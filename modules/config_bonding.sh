@@ -38,7 +38,7 @@ select_bonding_members() {
         options=($(sort_version_array options[@]))
 
         local cur_role="${roles[${index}]}"
-        draw_menu "${cursor}" "Bonding 대상 선택 : ${cur_role} (뒤로가기 : ← )" "${options[@]}"
+        draw_menu "${cursor}" "Select a Bonding Member : ${cur_role} (Back : ← )" "${options[@]}"
 
         read -rsn1 key
         if [[ "${key}" == $'\x1b' ]]; then 
@@ -64,7 +64,7 @@ select_bonding_members() {
 
                 bonding_map["${cur_role}"]="${selected_nic}"
                 remove_from_array_inplace "options" "${selected_nic}"
-                log "[DEBUG] 선택된 ${cur_role} NIC : ${selected_nic}"
+                log "[DEBUG] Selected ${cur_role} NIC : ${selected_nic}"
                 ((index++))
                 sleep 0.5
                 cursor=0
@@ -87,7 +87,7 @@ select_bonding_mode() {
     )
 
     local cursor=0
-    draw_menu "${cursor}" "Bonding Mode 선택 (지원 모드: 1, 4, 6)" "${modes[@]}"
+    draw_menu "${cursor}" "Select a Bonding Mode (active-backup - 1,  802.3ad - 4 (Todo), alb - 6 (Todo))" "${modes[@]}"
 
     while :; do
         read -rsn1 key
@@ -102,12 +102,12 @@ select_bonding_mode() {
             "")
                 bonding_mode="${modes[${cursor}]}"
                 bonding_mode_num="${bonding_modes_map[${bonding_mode}]}"
-                log "선택된 Bonding Mode : ${bonding_mode} (mode=${bonding_mode_num})"
+                log "Selected Bonding Mode : ${bonding_mode} (mode=${bonding_mode_num})"
                 break
                 ;;
         esac
 
-        draw_menu "${cursor}" "Bonding Mode 선택 (지원 모드: 1, 4, 6)" "${modes[@]}"
+        draw_menu "${cursor}" "Select a Bonding Mode (active-backup - 1,  802.3ad - 4 (Todo), alb - 6 (Todo))" "${modes[@]}"
     done
 }
 
@@ -121,36 +121,41 @@ read_bonding_ip_info() {
 
     while :; do
         echo ""
-        echo "========================================="
-        echo "   Bonding Master에 할당할 IP 주소 입력   "
-        echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
-        echo "========================================="
+        echo "==================================================="
+        echo "   Wrtie an IP Address to assign for Bond0   "
+        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
+        echo "==================================================="
         read -rp "IPADDR: " ip_addr
-        bonding_info_map["IPADDR"]=${ip_addr}
+        
         [[ "${ip_addr}" == "r" || "${ip_addr}" == "R" ]] && continue
+        [[ -z "${ip_addr}" ]] && ip_addr="192.168.211.20"
+        bonding_info_map["IPADDR"]=${ip_addr}
 
-        echo "========================================="
-        echo "   Netmask (예: 255.255.255.0)   "
-        echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
-        echo "========================================="
+        echo "==================================================="
+        echo "   Netmask (example - 255.255.255.0)   "
+        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
+        echo "==================================================="
         read -rp "NETMASK: " netmask
-        bonding_info_map["NETMASK"]=${netmask}
+        
         [[ "${netmask}" == "r" || "${netmask}" == "R" ]] && continue
+        [[ -z "${netmask}" ]] && netmask="255.255.0.0"
+        bonding_info_map["NETMASK"]=${netmask}
 
-        echo "========================================="
-        echo "   Gateway 입력                           "
-        echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
-        echo "========================================="
+        echo "==================================================="
+        echo "   Gateway                            "
+        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
+        echo "==================================================="
         read -rp "GATEWAY: " gateway
-        bonding_info_map["GATEWAY"]=${gateway}
-      
-        [[ "${gateway}" == "r" || "${gateway}" == "R" ]] && continue
 
-        echo "========================================="
-        echo "   DNS 서버 입력 (기본: 8.8.8.8)          "
-        echo " ('r' 입력하면 IP주소부터 다시 기입 가능.)"
-        echo "========================================="
-        read -rp "DNS1 [공백 시, 8.8.8.8 사용 ]: " dns1
+        [[ "${gateway}" == "r" || "${gateway}" == "R" ]] && continue
+        [[ -z "${gateway}" ]] && gateway="192.168.222.1"
+        bonding_info_map["GATEWAY"]=${gateway}
+
+        echo "==================================================="
+        echo "   DNS Server IP                             "
+        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
+        echo "==================================================="
+        read -rp "DNS1 [if the input is empty, it will be filled with 8.8.8.8]: " dns1
        
         [[ "${dns1}" == "r" || "${dns1}" == "R" ]] && continue
         [[ -z "${dns1}" ]] && dns1="8.8.8.8"
@@ -166,10 +171,10 @@ extract_bonding_files() {
     declare -gA bonding_file_map
 
     if [[ -z ${bondig_config_tar} ]]; then
-        error_exit "bonding_config.tar.gz 파일을 찾을 수 없습니다."
+        error_exit "Cannot find a file 'bonding_config.tar.gz'"
     fi
 
-    log "bonding_config.tar.gz 압축 해제 중..."
+    log "Unzip bonding_config.tar.gz..."
     extracted_bonding_files=($(tar -xvzf "${bondig_config_tar}" -C "${RESOURCES_DIR}"))
 
     for file in "${extracted_bonding_files[@]}"; do
@@ -196,9 +201,9 @@ clean_ifcfg_files() {
         [[ "${nic_name}" == "lo" ]] && continue
 
         if [[ " ${bonding_nics[*]} " =~ " ${nic_name} " ]]; then
-            log "유지됨: ${file} (bonding 대상 NIC)"
+            log "Not Delete: ${file} (bonding member NIC)"
         else
-            log "삭제됨: ${file} (bonding 구성과 무관)"
+            log "Delete: ${file} (Not a bonding member NIC)"
             rm -f "$file"
         fi
     done
@@ -209,14 +214,14 @@ generate_bonding_ifcfg_slaves() {
     local target_path="/etc/sysconfig/network-scripts"
 
     if [[ ! -f "${template_path}" ]]; then
-        error_exit "슬레이브 템플릿 파일을 찾을 수 없습니다: ${template_path}"
+        error_exit "Cannot find a template file ( Slave ): ${template_path}"
     fi
 
     for role in primary secondary; do
         local nic="${bonding_map[${role}]}"
         local output_file="${target_path}/ifcfg-${nic}"
 
-        log "bonding 슬레이브 파일 생성 중: ${output_file}"
+        log "Create a bonding slave file : ${output_file}"
 
         # FIle 초기화 ( 비우기 )
         > "${output_file}" 
@@ -238,7 +243,7 @@ generate_bonding_ifcfg_slaves() {
             esac
         done < "${template_path}"
 
-        log "${output_file} : 생성 완료: "
+        log "Created ${output_file} Successfully."
         cat ${output_file}
     done
 }
@@ -248,12 +253,12 @@ generate_bonding_ifcfg_master() {
     local target_path="/etc/sysconfig/network-scripts"
 
     if [[ ! -f "${template_path}" ]]; then
-        error_exit "슬레이브 템플릿 파일을 찾을 수 없습니다: ${template_path}"
+        error_exit "Cannot find a template file ( Master ): ${template_path}"
     fi
 
     local output_file="${target_path}/ifcfg-bond0"
 
-    log "bonding 슬레이브 파일 생성 중: ${output_file}"
+    log "Create a bonding master file: ${output_file}"
 
     # FIle 초기화 ( 비우기 )
     > "${output_file}"
@@ -285,7 +290,7 @@ generate_bonding_ifcfg_master() {
                 ;;
         esac
     done < "${template_path}"
-    log "${output_file} : 생성 완료: "
+    log "Created ${output_file} Successfully."
     cat ${output_file}
 }
 
@@ -312,7 +317,7 @@ configure_bonding_nmcli() {
     for role in primary secondary; do
         local nic="${bonding_map[${role}]}"
         nmcli connection add type ethernet slave-type bond con-name "bond0-p${index}" ifname "${nic}" master bond0
-        log "Slave 연결 완료: ${nic} → bond0-p${index}"
+        log "Completed SLave Connection: ${nic} → bond0-p${index}"
         ((index++))
     done
         
@@ -337,17 +342,18 @@ configure_bonding_nmcli() {
 # -------------------------- 모든 버전 공통 : Bonding 구성 확인 -------------------
 
 show_bonding_status() {
+    sleep 3
     local bond_dev="bond0"
     local bond_info="/proc/net/bonding/${bond_dev}"
 
     if [[ -f "${bond_info}" ]]; then
         echo ""
         echo "==========================================="
-        echo "     Bonding 상태 (${bond_dev}) 확인 결과"
+        echo "     Result :  (${bond_dev})"
         echo "==========================================="
         cat "${bond_info}"
     else
-        echo "[ERROR] ${bond_info} 파일을 찾을 수 없습니다. bonding이 정상적으로 구성되지 않았을 수 있습니다."
+        echo "[ERROR] Cannot find ${bond_info} File. Need to check a bonding config manually."
     fi
 }
 
@@ -393,4 +399,5 @@ else
     configure_bonding_nmcli
 fi
 
+rm -rv $(echo "${RESOURCES_DIR}/ifcfg-*")
 show_bonding_status

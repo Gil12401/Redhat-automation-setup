@@ -10,12 +10,12 @@ source "${UTIL_DIR}/util_functions.sh"
 # Menu Options 
 cursor=0
 options=(
-    "Local Repository 설정"
-    "Bonding 설정"
-    "Bonding 설정 초기화"
-    "작업 예정 2."
-    "작업 예정 3."
-    "종료"
+    "Local Repository Setup"
+    "Bonding Setup"
+    "Bonding Reset"
+    "Todo 2."
+    "Todo 3."
+    "Exit"
 )
 
 handlers=(
@@ -40,20 +40,20 @@ run_reset_bonding() {
 }
 
 run_task2() {
-  echo "[TODO] task2 실행 예정"
+  echo "[TODO] task2"
 }
 
 run_task3() {
-  echo "[TODO] task3 실행 예정"
+  echo "[TODO] task3"
 }
 
 run_exit() {
-    log "init-setup을 종료합니다."
+    log "Exit Redhat-Automation Script"
     exit 0 
 }
 
 while true; do
-    draw_menu "${cursor}" "Redhat 계열 init-setup 자동화 메뉴" "${options[@]}"
+    draw_menu "${cursor}" "RHEL Automation Menu" "${options[@]}"
 
     read -rsn1 key
     if [[ ${key} == $'\x1b' ]]; then 
@@ -78,7 +78,7 @@ while true; do
         # Enter
         "")
             ${handlers[${cursor}]}
-            read -p "계속하려면 Enter 키를 누르세요..."
+            read -p "Press 'Enter' for continue..."
             ;;
     esac
 done

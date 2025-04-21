@@ -29,10 +29,10 @@ extract_local_repo_files() {
     declare -gA local_repo_map
 
     if [[ -z ${local_repo_tar} ]]; then
-        error_exit "local_repo.tar.gz 파일을 찾을 수 없습니다."
+        error_exit "Cannot find 'local_repo.tar.gz'"
     fi
 
-    log "local_repo.tar.gz 압축 해제 중..."
+    log "Unzip local_repo.tar.gz..."
     local extracted_files=($(tar -xvzf "${local_repo_tar}" -C "${RESOURCES_DIR}"))
 
     for value in "${extracted_files[@]}"; do
@@ -54,22 +54,23 @@ select_repo_file() {
 select_iso_device() {
     declare -gA device_map
 
-    local options=("/dev/sr1 | LoremIpsum") # /dev/sr1 | LoremIpsum : DUMMY option
+    # /dev/sr1 | LoremIpsum : DUMMY option
+    local options=() 
     local cursor=0
 
-    log "iso9660 타입 CD-ROM 장치를 검색..."
+    log "Search type of iso9660 Filesystem ( CD-ROM )"
     local mount_point="/mnt"
     local selected_dev=""
 
     mapfile -t found_devices < <(blkid | grep 'iso9660' | cut -d: -f1)
 
     if [[ ${#found_devices[@]} -eq 0 ]]; then
-        echo "[ERROR] iso9660 타입 장치를 찾지 못했습니다."
+        echo "[ERROR] Couldn't find a device, type iso9660."
         exit 1
     fi
 
     for dev in "${found_devices[@]}"; do
-        echo "[DEBUG] 장치 마운트 시도: ${dev}"
+        # echo "[DEBUG] Trying mount a device: ${dev}"
         umount "${mount_point}" &>/dev/null
         mount "${dev}" "${mount_point}" &>/dev/null
         local ret=$?
@@ -82,22 +83,22 @@ select_iso_device() {
                 # shellcheck disable=SC2034
                 device_map["${dev}"]="${name}"
             else
-                echo "[DEBUG] .treeinfo 없음"
+                echo "[DEBUG]'.treeinfo' does not exist in this dev"
             fi
         else
-            echo "[DEBUG] -> 마운트 실패: ${dev}"
+            echo "[DEBUG] -> Mount Failed: ${dev}"
         fi
 
         umount "${mount_point}" &>/dev/null
     done
 
     if [[ ${#options[@]} -eq 0 ]]; then
-        echo "[ERROR] .treeinfo 파일을 가진 ISO 장치를 찾을 수 없습니다."
+        echo "[ERROR] Cannot find an iso device has '.treeinfo'."
         exit 1
     fi
 
     while true; do 
-        draw_menu "${cursor}" "/mnt에 mount할 device를 선택하세요." "${options[@]}"
+        draw_menu "${cursor}" "Select a device for mounting at /mnt" "${options[@]}"
 
         read -rsn1 key
         if [[ ${key} == $'\x1b' ]]; then 
@@ -110,42 +111,48 @@ select_iso_device() {
             $'\x1b[B') cursor=$((cursor + 1)); [[ ${cursor} -ge ${#options[@]} ]] && cursor=0 ;;
 
             "") 
-            log "선택한 장치 : ${options[${cursor}]}"
+            # log "Selected Device : ${options[${cursor}]}"
             select_iso_device_handler "${options[${cursor}]}" selected_dev
             break 
             ;;
         esac
     done
 
-    echo "[INFO] 선택된 장치: ${selected_dev}"
+    log "Selected Device: ${selected_dev}"
     umount "${mount_point}" &>/dev/null
-    mount | grep "${selected_dev}" || echo "[DEBUG] 현재 장치는 아직 마운트되지 않음"
+    # || echo "[DEBUG] dev is not mounted yet."
+    mount | grep "${selected_dev}" 
     mount "${selected_dev}" "${mount_point}"
     ret=$?
 
     if [[ ${ret} -eq 0 ]]; then
         true
     else
-        echo "[ERROR] ${selected_dev} 마운트 실패 (exit code: ${ret})"
-        exit 1
+        error_exit "${selected_dev} Mount Failed. (exit code: ${ret})"
     fi
 
-    echo "[INFO] ${selected_dev} 가 ${mount_point} 에 마운트되었습니다."
+    log "${selected_dev} is mounted at ${mount_point}."
 }
 
 # -------------------------- 디렉토리 복사 --------------------------
 copy_mounted_files() {
-    read -p "------ /mnt에서 복사할 디렉토리 이름을 입력하세요 ------: " dirname
+    read -p "Write the name of Directory for copying to /mnt: " dirname
     dirpath="/${dirname}"
 
-    log "${dirpath} 생성 및 /mnt 내용 복사"
+    log "Create ${dirpath}, Copying contents from /mnt."
     mkdir -p "${dirpath}"
-    rsync -ah --info=progress2 /mnt/ "${dirpath}/" || error_exit "복사 실패"
+
+    # if [[ -n $(yum list installed | grep 'rsync') ]]
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -ah --info=progress2 /mnt/ "${dirpath}/" || error_exit "Failed Copy."
+    else
+        show_copy_progress "/mnt" "${dirpath}"
+    fi 
 }
 
 # -------------------------- .repo 백업 --------------------------
 backup_repo_files() {
-    log "/etc/yum.repos.d/ 하위 파일 백업 중... ( 디렉터리 bak) "
+    log "Backup all files under /etc/yum.repos.d/... ( /etc/yum.repos.d/bak) "
     cd /etc/yum.repos.d/
     mkdir -p bak
 
@@ -154,14 +161,13 @@ backup_repo_files() {
     if [[ ${#repo_files[@]} -gt 0 ]]; then
         mv "${repo_files[@]}" bak/
     else
-        log ".repo 파일이 없습니다."
+        log ".repo file does not exist"
     fi
     shopt -u nullglob
 }
 
 # -------------------------- baseurl 경로 설정 --------------------------
 build_baseurl_map() {
-
     declare -gA baseurl_map
     local value_head="file://"
     local value_tails=$(find "$1" -type d -name "Packages")
@@ -198,7 +204,7 @@ generate_local_repo() {
     while IFS= read -r line; do
         if [[ "${line}" =~ ^\[.*\]$ ]]; then
             cur_key=$(echo "${line}" | cut -d "-" -f 2 | tr -d "[-]")
-            log "[DEBUG] cur_key : ${cur_key}"
+            log "Current section ( Key ) : ${cur_key}"
         fi
 
         if [[ "${line}" == *baseurl* ]]; then
@@ -213,15 +219,16 @@ generate_local_repo() {
 }
 
 # -------------------------- Main --------------------------
-log "Local Repository 자동 설정 시작"
+log "Local Repository Automation Setup..."
 
 extract_local_repo_files
 version_id=$(get_os_version)
-log "현재 OS 버전: $(cat /etc/redhat-release)"
+log "Current OS Version: $(cat /etc/redhat-release)"
 
 local_repo_file=$(select_repo_file "${version_id}")
-[[ -z "${local_repo_file}" ]] && error_exit "적절한 local_repo 파일을 찾을 수 없습니다."
-[[ ! -f "${local_repo_file}" ]] && error_exit "${local_repo_file} 파일이 존재하지 않습니다."
+[[ -z "${local_repo_file}" ]] && error_exit "Cannot find any proper local_repo file."
+[[ ! -f "${local_repo_file}" ]] && error_exit "${local_repo_file} does not exist."
+sleep 1
 
 select_iso_device
 copy_mounted_files
@@ -230,8 +237,6 @@ build_baseurl_map "${dirpath}" "${local_repo_file}"
 generate_local_repo "${local_repo_file}"
 
 rm -rv $(echo "${RESOURCES_DIR}/centOS*")
-# rm -rv $(echo "${RESOURCES_DIR}/centOS7_local.repo")
-# rm -rv $(echo "${RESOURCES_DIR}/centOS8_local.repo")
 
-log "yum repolist 실행 결과:"
+log "yum repolist Result:"
 yum repolist
