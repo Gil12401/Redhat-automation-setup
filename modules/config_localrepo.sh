@@ -1,48 +1,51 @@
 #!/bin/bash
+# ======================= [ Environment Setup ] ==========================
 
-#IFS Backup 
+# IFS Backup 
 PRE_IFS=${IFS}
 
 # Directory Path 
-SCRIPT_DIR="$(dirname "$(realpath "$0")")" # SCRIPT_DIR path : .../init-setup/modules
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"  # SCRIPT_DIR path : .../redhat-automation/modules
 UTIL_DIR="${SCRIPT_DIR}/../util"
 RESOURCES_DIR="${SCRIPT_DIR}/../resources"
 
 # util functions
-source "${UTIL_DIR}/util_functions.sh"
+source "${UTIL_DIR}/util_loader.sh"
 
 # required resources
-local_repo_tar=$(find "${RESOURCES_DIR}" -name "local_repo.tar.gz" 2> /dev/null )
+local_repo_tar=$(find "${RESOURCES_DIR}" -name "local_repo.tar.gz" 2> /dev/null)
 
-select_iso_device_handler() {
-    local option=$1
-    local ref_name=$2
-    local parsed_name
-
-    parsed_name=$(echo "${option}" | cut -d '|' -f 1 | xargs)
-
-      eval "$ref_name=\"\$parsed_name\""
-}
-
-# -------------------------- Extract local_repo.tar.gz --------------------------
+# ======================= [ Function Definitions ] ==========================
 extract_local_repo_files() {
-    declare -gA local_repo_map
+    declare -A local_repo_map
 
     if [[ -z ${local_repo_tar} ]]; then
-        error_exit "Cannot find 'local_repo.tar.gz'"
+        error_exit "Cannot find a file 'local_repo.tar.gz'"
     fi
 
-    log "Unzip local_repo.tar.gz..."
+    log "Unzip local_repo.tar.gz... " >&2
     local extracted_files=($(tar -xvzf "${local_repo_tar}" -C "${RESOURCES_DIR}"))
 
-    for value in "${extracted_files[@]}"; do
-        local key=$(echo "${value}" | cut -d '_' -f 1)
-        local_repo_map["${key}"]="$(realpath "${RESOURCES_DIR}/${value}")"
+    # TODO ) "centOS7" -> "old_Version" "centOS8" -> "new_Version" 
+    
+    # "centOS7" -> centOS7_local.repo, "centOS8" -> centOS8_local.repo
+    for file in "${extracted_files[@]}"; do
+        local key=$(echo "${file}" | cut -d '_' -f 1)
+        local_repo_map["${key}"]="$(realpath "${RESOURCES_DIR}/${file}")"
     done
+
+    map_to_json "local_repo_map"
 }
 
 select_repo_file() {
+    declare -A local_repo_map 
+
     local version_id="$1"
+    local local_repo_json="$2"
+    local json_keys=($(echo "${local_repo_json}" | jq -r 'keys[]'))
+
+    json_to_map "${local_repo_json}" "local_repo_map" "${json_keys[@]}"
+
     if [[ ${version_id} -le 7 ]]; then
         echo "${local_repo_map["centOS7"]}"
     else
@@ -50,15 +53,13 @@ select_repo_file() {
     fi
 }
 
-# -------------------------- ISO 장치 선택 --------------------------
 select_iso_device() {
-    declare -gA device_map
+    declare -A device_map
 
-    # /dev/sr1 | LoremIpsum : DUMMY option
     local options=() 
     local cursor=0
 
-    log "Search type of iso9660 Filesystem ( CD-ROM )"
+    log "Search type of iso9660 File System ( CD-ROM )"
     local mount_point="/mnt"
     local selected_dev=""
 
@@ -70,7 +71,6 @@ select_iso_device() {
     fi
 
     for dev in "${found_devices[@]}"; do
-        # echo "[DEBUG] Trying mount a device: ${dev}"
         umount "${mount_point}" &>/dev/null
         mount "${dev}" "${mount_point}" &>/dev/null
         local ret=$?
@@ -79,9 +79,9 @@ select_iso_device() {
             if [[ -f "${mount_point}/.treeinfo" ]]; then
                 name=$(sed -n "/^\[general\]/,/^\[/p" "${mount_point}/.treeinfo" \
                       | sed "1d;/^\[/q" | grep name | cut -d "=" -f 2 | xargs)
-                options+=("${dev} | ${name}")
-                # shellcheck disable=SC2034
-                device_map["${dev}"]="${name}"
+                device_map["dev"]="${dev}"
+                device_map["name"]="${name}"
+                options+=("$(map_to_json device_map)")
             else
                 echo "[DEBUG]'.treeinfo' does not exist in this dev"
             fi
@@ -97,22 +97,18 @@ select_iso_device() {
         exit 1
     fi
 
+    local key_order="dev name"
     while true; do 
-        draw_menu "${cursor}" "Select a device for mounting at /mnt" "${options[@]}"
+        draw_table_menu "${cursor}" "Select a device for mounting at /mnt" "${key_order}" "${options[@]}"
 
-        read -rsn1 key
-        if [[ ${key} == $'\x1b' ]]; then 
-            read -rsn2 -t 0.1 key2
-            key+="${key2}"
-        fi 
+        key=$(read_key)
 
         case "${key}" in
             $'\x1b[A') cursor=$((cursor - 1)); [[ ${cursor} -lt 0 ]] && cursor=$((${#options[@]} -1)) ;;
             $'\x1b[B') cursor=$((cursor + 1)); [[ ${cursor} -ge ${#options[@]} ]] && cursor=0 ;;
 
             "") 
-            # log "Selected Device : ${options[${cursor}]}"
-            select_iso_device_handler "${options[${cursor}]}" selected_dev
+            selected_dev=$(echo "${options[${cursor}]}" | jq -r '.dev')
             break 
             ;;
         esac
@@ -134,9 +130,8 @@ select_iso_device() {
     log "${selected_dev} is mounted at ${mount_point}."
 }
 
-# -------------------------- 디렉토리 복사 --------------------------
 copy_mounted_files() {
-    read -p "Write the name of Directory for copying to /mnt: " dirname
+    read -p "Write the name of Directory for copying from /mnt: " dirname
     dirpath="/${dirname}"
 
     log "Create ${dirpath}, Copying contents from /mnt."
@@ -150,7 +145,6 @@ copy_mounted_files() {
     fi 
 }
 
-# -------------------------- .repo 백업 --------------------------
 backup_repo_files() {
     log "Backup all files under /etc/yum.repos.d/... ( /etc/yum.repos.d/bak) "
     cd /etc/yum.repos.d/
@@ -166,16 +160,13 @@ backup_repo_files() {
     shopt -u nullglob
 }
 
-# -------------------------- baseurl 경로 설정 --------------------------
 build_baseurl_map() {
-    declare -gA baseurl_map
-    local value_head="file://"
+    declare -A baseurl_map
     local value_tails=$(find "$1" -type d -name "Packages")
 
     for value_tail in ${value_tails}; do
         local key=""
         local value_tail=$(echo "${value_tail}" | sed "s/Packages.*//")
-        local value="baseurl=${value_head}${value_tail}"
 
         local IFS="/"
         for word in ${value_tail}; do
@@ -188,18 +179,23 @@ build_baseurl_map() {
             section=$(grep "^\[.*\]$" "$2")
             key=$(echo "${section}" | cut -d "-" -f 2 | tr -d "[-]")
         fi
-
-        baseurl_map["${key}"]="${value}"
+        
+        # ex ) "AppStream": "/dvd/AppStream/"
+        baseurl_map["${key}"]="${value_tail}"
     done
+
+    map_to_json "baseurl_map"
 }
 
-# -------------------------- local.repo 생성 --------------------------
 generate_local_repo() {
     local repo_template="$1"
+    local baseurl_json="$2"
     local tmp_file="/tmp/tmp_local.repo"
     touch "${tmp_file}"
     chmod 777 "${tmp_file}"
 
+    baseurl_json=$(jq 'with_entries(.value |= "baseurl=file://" + .)' <<< ${baseurl_json})
+   
     local cur_key=""
     while IFS= read -r line; do
         if [[ "${line}" =~ ^\[.*\]$ ]]; then
@@ -207,36 +203,37 @@ generate_local_repo() {
             log "Current section ( Key ) : ${cur_key}"
         fi
 
-        if [[ "${line}" == *baseurl* ]]; then
-            echo "${baseurl_map[${cur_key}]}" >> "${tmp_file}"
-        else
-            echo "${line}" >> "${tmp_file}"
-        fi
+        [[ "${line}" == *baseurl* ]] && \
+            line=$(jq -r --arg k "${cur_key}" '.[$k]' <<< "${baseurl_json}") 
+        
+        echo "${line}" >> "${tmp_file}"
+
     done < "${repo_template}"
 
     cp -f "${tmp_file}" /etc/yum.repos.d/local.repo
     rm -f "${tmp_file}"
 }
 
-# -------------------------- Main --------------------------
+# ======================= [ Main Logic ] ==========================
 log "Local Repository Automation Setup..."
 
-extract_local_repo_files
+local_repo_json=$(extract_local_repo_files)
 version_id=$(get_os_version)
 log "Current OS Version: $(cat /etc/redhat-release)"
 
-local_repo_file=$(select_repo_file "${version_id}")
+local_repo_file=$(select_repo_file "${version_id}" "${local_repo_json}")
 [[ -z "${local_repo_file}" ]] && error_exit "Cannot find any proper local_repo file."
 [[ ! -f "${local_repo_file}" ]] && error_exit "${local_repo_file} does not exist."
-sleep 1
+
+log "local_repo_file : ${local_repo_file}"
 
 select_iso_device
 copy_mounted_files
 backup_repo_files
-build_baseurl_map "${dirpath}" "${local_repo_file}"
-generate_local_repo "${local_repo_file}"
+baseurl_json=$(build_baseurl_map "${dirpath}" "${local_repo_file}")
+generate_local_repo "${local_repo_file}" "${baseurl_json}"
 
 rm -rv $(echo "${RESOURCES_DIR}/centOS*")
 
-log "yum repolist Result:"
+echo "====================== Repolist Result ============================="
 yum repolist
