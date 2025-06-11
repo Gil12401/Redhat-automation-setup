@@ -1,22 +1,17 @@
 #!/bin/bash 
 
-# autorun.sh 실행 디렉토리 : /init-setup
+# autorun.sh 실행 디렉토리 : /redhat-automation
 
-# ex. autorun.sh path : /mnt/init-setup/autorun.sh 
-# -> SCRIPT_DIR path : /mnt/init-setup 
+# ex. autorun.sh path : /mnt/redhat-automation/autorun.sh 
+# -> SCRIPT_DIR path : /mnt/redhat-automation 
 
 # Directory Path 
-SCRIPT_DIR="$(dirname "$(realpath "$0")")" 
-UTIL_DIR="${SCRIPT_DIR}/util"
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 main_script="${SCRIPT_DIR}/main.sh"
 
-# util functions
-source "${UTIL_DIR}/util_functions.sh"
-
-# 실행 권한 확인 
+# Check a permission (execute -> chmod +x)
 if [[ ! -x "${main_script}" ]]; then
-    error_exit "main.sh 실행 권한이 없습니다."
+    error_exit "Permission Denided : main.sh "
 fi
 
-log "init-setup 실행 시작"
 bash "${main_script}"

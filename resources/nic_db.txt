@@ -1,0 +1,8 @@
+# VendorID DeviceID VendorName ModelName Speed
+8086 1521 Intel I350 1G
+8086 10fb Intel 82599ES 10G
+8086 154d Intel X550 10G
+14e4 1657 Broadcom BCM5709 1G
+14e4 16a1 Broadcom BCM57810 10G
+15b3 1017 Mellanox ConnectX-3 40G
+1af4 1000 RedHat Virtio-Net -

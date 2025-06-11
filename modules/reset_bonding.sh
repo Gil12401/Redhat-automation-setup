@@ -1,47 +1,50 @@
 #!/bin/bash
+# ======================= [ Environment Setup ] ==========================
 
 # IFS Backup
 PRE_IFS=${IFS}
 
 # Directory Path 
-SCRIPT_DIR="$(dirname "$(realpath "$0")")" # SCRIPT_DIR path : .../init-setup/modules
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"  # SCRIPT_DIR path : .../redhat-automation/modules
 UTIL_DIR="${SCRIPT_DIR}/../util"
 RESOURCES_DIR="${SCRIPT_DIR}/../resources"
 
 # util functions
-source "${UTIL_DIR}/util_functions.sh"
+source "${UTIL_DIR}/util_loader.sh"
 
 # required resources
-bondig_reset_tar=$(find "${RESOURCES_DIR}" -name "bonding_reset.tar.gz" 2> /dev/null )
+bonding_reset_tar=$(find "${RESOURCES_DIR}" -name "bonding_reset.tar.gz" 2> /dev/null )
 
 # 공통 : /etc/sysconfig/network-scripts/ 하위 
 target_path="/etc/sysconfig/network-scripts"
 
-# -------------------------- CentOS7 이하 - ifcfg 설정 파일 -------------------
+# ======================= [ Function Definitions ] ==========================
 
+# Redhat old version (6, 7) - ifcfg (config file)
 extract_reset_files() {
-    declare -g extracted_reset_files
-    declare -gA reset_file_map
+    declare -A reset_files_map
 
-    if [[ -z ${bondig_reset_tar} ]]; then
+    if [[ -z ${bonding_reset_tar} ]]; then
         error_exit "Cannot find a 'bonding_reset.tar.gz'"
     fi
 
-    log "Unzip bonding_reset.tar.gz..."
-    extracted_reset_files=($(tar -xvzf "${bondig_reset_tar}" -C "${RESOURCES_DIR}"))
+    log "Unzip bonding_reset.tar.gz..." >&2
+    extracted_reset_files=($(tar -xvzf "${bonding_reset_tar}" -C "${RESOURCES_DIR}"))
 
+    # ex: "nic_up" -> ifcfg-nic_up, "nic_down" -> ifcfg-nic_down
     for file in "${extracted_reset_files[@]}"; do
-        # ex: "master" -> ifcfg-master, "slave" -> ifcfg-slave
         key=$(echo "${file}" | cut -d '-' -f 2 | xargs)  
-        reset_file_map["${key}"]="${file}"
+        reset_files_map["${key}"]="${file}"
     done
+
+    map_to_json "reset_files_map"
 }
 
 select_enable_nic() {
     # ex. nic_map["eth0"]="up" /  nic_map["eth1"]="down" /  nic_map["eth2"]="down"
-    declare -gA nic_map
-    declare -g options
-    declare -g active_nic
+    declare -A enable_nic_map
+    local cursor=0
+    local pci_keys="name addr vendor device"
 
     IFS=$'\n'
     local nic_rows=($(ip addr show | grep "<[^>]*>" | grep -v -E "LOOPBACK|MASTER"))
@@ -49,44 +52,37 @@ select_enable_nic() {
    
     for nic in "${nic_rows[@]}"; do
         local nic_name=$(echo "${nic}" | cut -d " " -f 2 | tr -d ":")
-        # log "nic_name : ${nic_name}"
-        options+=("${nic_name}")
+        local pci_json=$(get_pci_map_from_nic "${nic_name}")
+        options+=("${pci_json}")
     done
 
-    local cursor=0
-    # Ascend Sorting
-    options=($(sort_version_array options[@]))
     while :; do
-        draw_menu "${cursor}" "Select an NIC for enable after reset bonding ( up )" "${options[@]}"
-
-        read -rsn1 key
-        if [[ "${key}" == $'\x1b' ]]; then 
-            read -rsn2 -t 0.1 key2
-            key+="${key2}"
-        fi 
+        draw_table_menu "${cursor}" "Select an NIC for Activating after reset bonding ( ifup )" "${pci_keys}" "${options[@]}" >&2
+        key=$(read_key)
 
          case "${key}" in
             $'\x1b[A') cursor=$((cursor - 1)); [[ ${cursor} -lt 0 ]] && cursor=$((${#options[@]} - 1)) ;;
             $'\x1b[B') cursor=$((cursor + 1)); [[ ${cursor} -ge ${#options[@]} ]] && cursor=0 ;;
 
             "")
-                # ex. nic_map["eth0"]="up" /  nic_map["eth1"]="down" /  nic_map["eth2"]="down"
-                
+                # nic_map["eth0"]="up" /  nic_map["eth1"]="down" /  nic_map["eth2"]="down"
+                local selected_element="${options[${cursor}]}"
+                local selected_nic=$(echo ${selected_element} | jq -r '.name')    
                 local options_length=${#options[@]}
-
+                           
                 for ((i=0; i<options_length; i++)); do
-                    if [[ ${i} -eq ${cursor} ]]; then
-                        nic_map[${options[${i}]}]="up"
-                        active_nic="${options[${i}]}"
-                    else
-                        nic_map[${options[${i}]}]="down"
-                    fi
+                    nic_name=$(echo ${options[${i}]} | jq -r '.name')    
+                    enable_nic_map[${nic_name}]="down" 
                 done                
 
+                active_nic="${selected_nic}"
+                enable_nic_map[${selected_nic}]="up"
             break
             ;;
         esac
     done
+
+    map_to_json "enable_nic_map"
 }
 
 # bonding 관련 ifcfg 파일 삭제 
@@ -97,16 +93,12 @@ remove_bonding_ifcfg() {
     local member_rows=($(ip addr show | grep "<[^>]*>" | grep  -E "MASTER|SLAVE"))
     IFS=${PRE_IFS}
 
-    # 1. ifcfg-bond0 / ifcfg-slave1 / ifcfg-slave2 삭제 
+    # ifcfg-bond0 / ifcfg-slave1 / ifcfg-slave2 삭제 
     # member : ex. eth0 / eth2 / bond0
     
     for member in "${member_rows[@]}"; do
         local member=$(echo "${member}" | cut -d " " -f 2 | tr -d ":")
         local ifcfg_file="${prefix}${member}"
-
-        # log "member : ${member}"
-        # log "ifcfg-file : ${ifcfg_file}"
-        # log "${target_path}/${ifcfg-file}"
 
         if [[ -f ${target_path}/${ifcfg_file} ]]; then
             rm -v "${target_path}/${ifcfg_file}"
@@ -122,16 +114,16 @@ deactivate_bonding_interface() {
     if ip link show "${bonding_dev}" &> /dev/null; then
         log "${bonding_dev} still exists. Trying to delete now."
 
-        # 1. bonding 장치 down
+        # 1. bonding dev down
         ip link set "${bonding_dev}" down
 
-        # 2. bonding 장치 삭제
+        # 2. delete bonding dev
         ip link delete "${bonding_dev}" type bond && log "${bonding_dev} deleted complete."
     else
         log "${bonding_dev} does not exist. Skip this phase."
     fi
 
-    # 3. 커널에서 bonding 모듈 언로드
+    # 3. unload bonding module from kernel 
     if lsmod | grep -q '^bonding'; then
         log "Trying to unload a bonding kernel module..."
         modprobe -r bonding && log "bonding module is unloaded succesfully."
@@ -140,85 +132,110 @@ deactivate_bonding_interface() {
     fi
 }
 
-read_nic_ip_info() {
+read_nic_network_info() {
 
-    declare -gA nic_info_map
-    declare -g ip_addr
-    declare -g netmask
-    declare -g gateway
-    declare -g dns1
+    declare -A nic_network_map
 
     while :; do
-        echo "==================================================="
-        echo "   Wrtie an IP Address to assign for enabled NIC   "
-        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
-        echo "==================================================="
-        read -rp "IPADDR: " ip_addr
+        eprint ""
+        eprint "==========================================================="
+        eprint "   Wrtie an IP Address to assign for enabled NIC   "
+        eprint "   (Can write at first Step (IP Addr) if input 'r' or 'R')   "
+        eprint "==========================================================="
+        eprint "IPADDR: "
+        read -r ip_addr
 
         [[ "${ip_addr}" == "r" || "${ip_addr}" == "R" ]] && continue
         [[ -z "${ip_addr}" ]] && ip_addr="192.168.211.20"
-        nic_info_map["IPADDR"]=${ip_addr}
+        nic_network_map["IPADDR"]=${ip_addr}
 
-         echo "==================================================="
-        echo "   Netmask (example - 255.255.255.0)   "
-        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
-         echo "==================================================="
-        read -rp "NETMASK: " netmask
+        eprint "==========================================================="
+        eprint "   Netmask (example - 255.255.255.0)   "
+        eprint "   (Can write at first Step (IP Addr) if input 'r' or 'R')   "
+        eprint "==========================================================="
+        eprint "NETMASK: "
+        read -r netmask
         
         [[ "${netmask}" == "r" || "${netmask}" == "R" ]] && continue
         [[ -z "${netmask}" ]] && netmask="255.255.0.0"
-        nic_info_map["NETMASK"]=${netmask}
-        nic_info_map["PREFIX"]=$(get_prefix_from_subnet "${netmask}")
+        nic_network_map["NETMASK"]=${netmask}
+        nic_network_map["PREFIX"]=$(get_prefix_from_subnet "${netmask}")
 
-        echo "==================================================="
-        echo "   Gateway                            "
-        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
-        echo "==================================================="
-        read -rp "GATEWAY: " gateway
+        eprint "==========================================================="
+        eprint "   Gateway                            "
+        eprint "   (Can write at first Step (IP Addr) if input 'r' or 'R')   "
+        eprint "==========================================================="
+        eprint "GATEWAY: " 
+        read -r gateway
       
         [[ "${gateway}" == "r" || "${gateway}" == "R" ]] && continue
         [[ -z "${gateway}" ]] && gateway="192.168.222.1"
-        nic_info_map["GATEWAY"]=${gateway}
+        nic_network_map["GATEWAY"]=${gateway}
 
-        echo "==================================================="
-        echo "   DNS Server IP                         "
-        echo "   (Can write from first (IP Addr) if input 'r' or 'R')   "
-         echo "==================================================="
-        read -rp "DNS1 [if the input is empty, it will be filled with 8.8.8.8]: " dns1
+        eprint "==========================================================="
+        eprint "   DNS Server IP                         "
+        eprint "   (Can write at first Step (IP Addr) if input 'r' or 'R')   "
+        eprint "==========================================================="
+        eprint "DNS1 [if the input is empty, it will be filled with 8.8.8.8]: "
+        read -r dns1
         
         [[ "${dns1}" == "r" || "${dns1}" == "R" ]] && continue
         [[ -z "${dns1}" ]] && dns1="8.8.8.8"
-        nic_info_map["DNS1"]=${dns1}
-
+        nic_network_map["DNS1"]=${dns1}
         break
     done
+
+    map_to_json "nic_network_map"
 }
 
 generate_nic_ifcfg() {
+    local reset_files_json=$1
+    local enable_nic_json=$2
+    nic_network_json=$(read_nic_network_info)
 
-    # nic_info_map for ifcfg-nic_up 
-    read_nic_ip_info
-    
-    for nic in "${!nic_map[@]}"; do
-        local state=${nic_map[${nic}]}
+    local nic_up_file=$(echo "${reset_files_json}" | jq -r '.nic_up')
+    local nic_down_file=$(echo "${reset_files_json}" | jq -r '.nic_down')
+
+    IFS=$'\n'
+    local nic_enable_keys=()
+    local nic_enable_rows=$(ip addr show | grep "<[^>]*>" | grep -v -E "LOOPBACK|MASTER")
+    IFS=${PRE_IFS}
+
+    for row in "${nic_enable_rows[@]}"; do
+        local nic_enable_key=$(echo "${row}" | cut -d " " -f 2 | tr -d ":")
+        nic_enable_keys+=(${nic_enable_key})
+    done
+
+    local nic_network_keys=("NETMASK" "PREFIX" "GATEWAY" "IPADDR" "DNS1")
+
+    declare -A enable_nic_map
+    declare -A nic_network_map
+
+    json_to_map "${enable_nic_json}" "enable_nic_map" "${nic_enable_keys[@]}"
+    json_to_map "${nic_network_json}" "nic_network_map" "${nic_network_keys[@]}"
+
+    for nic in "${!enable_nic_map[@]}"; do
+        local state=${enable_nic_map[${nic}]}
         # log "nic : ${nic}"
         # log "state : ${nic_map[${nic}]}"
 
         local output_file="${target_path}/ifcfg-${nic}"
         local reset_file=""
 
-        # FIle 초기화 ( 비우기 )
+        # Make ${output_file} empty
         > "${output_file}"
 
         log "Create ${output_file}... " 
 
         case "${state}" in
             up)
-                reset_file="${RESOURCES_DIR}/${reset_file_map["nic_up"]}"
+                # reset_file="${RESOURCES_DIR}/${reset_file_map["nic_up"]}"
+                reset_file="${RESOURCES_DIR}/${nic_up_file}"
                 ;;
 
             down)
-                reset_file="${RESOURCES_DIR}/${reset_file_map["nic_down"]}"
+                # reset_file="${RESOURCES_DIR}/${reset_file_map["nic_down"]}"
+                reset_file="${RESOURCES_DIR}/${nic_down_file}"
                 ;;
         esac
 
@@ -232,7 +249,7 @@ generate_nic_ifcfg() {
                 ;;
 
             IPADDR|NETMASK|GATEWAY|DNS1)
-                echo "${key}=${nic_info_map[${key}]}" >> "${output_file}"
+                echo "${key}=${nic_network_map[${key}]}" >> "${output_file}"
                 ;;
 
             *)
@@ -245,11 +262,10 @@ generate_nic_ifcfg() {
 }
 
 # -------------------------- RHEL 8버전 이상 - nmcli 설정 -------------------
-
 wait_until_nmcli_con_down() {
-   
     # result is empty : bond0 nmcli con down compele
     while :; do
+    
         local result=$(ip -d link show bond0 | grep -oP 'slave \K\S+')
         if [[ -z "${result}" ]]; then
             log "bond0 : nmcli con down complete !" 
@@ -270,17 +286,19 @@ deactivate_bonding_nmcli() {
     nmcli con down bond0
     wait_until_nmcli_con_down
 
-    for con in "${bonding_members[@]}"; do
-        nmcli con del "${con}"
+    for nic in "${bonding_members[@]}"; do
+        nmcli con del "${nic}"
     done
 }
 
 active_nic_nmcli() {
-
-    # NIC list
+    local active_nic=$1
     mapfile -t nics < <(ls /sys/class/net | grep -v '^lo$')
 
-    read_nic_ip_info
+    local nic_network_keys=("NETMASK" "PREFIX" "GATEWAY" "IPADDR" "DNS1")
+    declare -A nic_network_map
+    nic_network_json=$(read_nic_network_info)
+    json_to_map "${nic_network_json}" "nic_network_map" "${nic_network_keys[@]}"
 
     # regenerate all NIC conns without Bonding 
     for nic in "${nics[@]}"; do
@@ -292,9 +310,9 @@ active_nic_nmcli() {
         if [[ "${nic}" == "${active_nic}" ]]; then
             log "activate : ${conn_name} (${nic})"
             nmcli con modify "${conn_name}" \
-            ipv4.addresses "${nic_info_map["IPADDR"]}/${nic_info_map["PREFIX"]}" \
-            ipv4.gateway "${nic_info_map["GATEWAY"]}" \
-            ipv4.dns "${nic_info_map["DNS1"]}" \
+            ipv4.addresses "${nic_network_map["IPADDR"]}/${nic_network_map["PREFIX"]}" \
+            ipv4.gateway "${nic_network_map["GATEWAY"]}" \
+            ipv4.dns "${nic_network_map["DNS1"]}" \
             ipv4.method manual \
             connection.autoconnect yes
             nmcli con up "${conn_name}"
@@ -306,30 +324,31 @@ active_nic_nmcli() {
     done
 }
 
-# -------------------------- Main --------------------------
+# ======================= [ Main Logic ] ==============================================
 
-# active_nic, nic_map["ethX"]="up" 결정
-select_enable_nic   
+# nic_map["ethX"]="up" -> active_nic 
+enable_nic_json=$(select_enable_nic)
+active_nic=$(jq -r 'to_entries[] | select(.value == "up") | .key' <<< "${enable_nic_json}")
 
 version_id=$(get_os_version)
 
 if [[ ${version_id} -le 7 ]]; then
-    # RHEL7 버전 이하 : ifcfg 설저파일 ( NetworkManager OFF )
-    extract_reset_files
+    # RHEL7 버전 이하 : ifcfg 설정 파일 ( NetworkManager OFF )
+
+    reset_files_json=$(extract_reset_files)
     remove_bonding_ifcfg
     deactivate_bonding_interface
-    generate_nic_ifcfg
+    generate_nic_ifcfg "${reset_files_json}" "${enable_nic_json}"
     flush_all_nic_ip
+    rm -rv $(echo "${RESOURCES_DIR}/ifcfg-*")
 
     log "network restart."
     systemctl restart network 
-
-    ip addr show
 else
     # RHEL8 버전 이상 : nmtui or nmcli ( NetworkManager )
     deactivate_bonding_nmcli
     flush_all_nic_ip
-    active_nic_nmcli
+    active_nic_nmcli "${active_nic}"
 fi
 
-rm -rv $(echo "${RESOURCES_DIR}/ifcfg-*")
+ip addr show
