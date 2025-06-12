@@ -8,6 +8,7 @@
 # Directory Path 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 main_script="${SCRIPT_DIR}/main.sh"
+source "${SCRIPT_DIR}/util/util_loader.sh"
 
 # Check a permission (execute -> chmod +x)
 if [[ ! -x "${main_script}" ]]; then
